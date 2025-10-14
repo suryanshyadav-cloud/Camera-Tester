@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Camera Tester — USB & Phone (Permission-debug)</title>
+  <style>
+    :root{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;color-scheme:light}
+    body{margin:0;padding:18px;background:#f7fafc;color:#0f172a}
+    header{display:flex;align-items:center;gap:12px}
+    h1{margin:0;font-size:18px}
+    .grid{display:grid;grid-template-columns:1fr 360px;gap:16px;margin-top:12px}
+    .card{background:white;border-radius:12px;padding:12px;box-shadow:0 6px 18px rgba(15,23,42,0.06)}
+    video{width:100%;height:auto;background:#000;border-radius:8px}
+    select,input,button{width:100%;padding:8px;border-radius:8px;border:1px solid #e2e8f0;margin-top:8px}
+    .controls{display:flex;gap:8px;margin-top:8px}
+    .controls button{flex:1}
+    canvas{width:100%;height:auto;border-radius:8px;background:#111}
+    .small{font-size:13px;color:#475569}
+    label{display:block;margin-top:8px;font-weight:600}
+    .stat{font-family:monospace;background:#eef2ff;padding:8px;border-radius:6px;margin-top:8px;white-space:pre-wrap}
+    footer{margin-top:14px;font-size:13px;color:#64748b}
+    .hint{background:#fff7ed;border-left:4px solid #f59e0b;padding:8px;border-radius:6px;margin-top:8px}
+    .ok{background:#ecffef;border-left:4px solid #10b981;padding:8px;border-radius:6px;margin-top:8px}
+    .sim{display:flex;gap:8px;margin-top:8px}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Camera Tester — USB & Phone (Permission-debug)</h1>
+    <div class="small">Improved permission handling, secure-origin detection, and simulated test cases for debugging.</div>
+  </header>
+
+  <div class="grid">
+    <div class="card">
+      <video id="preview" autoplay playsinline muted></video>
+
+      <div class="controls">
+        <button id="startBtn">Start</button>
+        <button id="stopBtn" disabled>Stop</button>
+        <button id="snapBtn" disabled>Snapshot</button>
+      </div>
+
+      <label for="deviceSelect">Choose camera (USB cameras show as separate devices)</label>
+      <select id="deviceSelect"></select>
+
+      <label for="resSelect">Choose resolution (try different ones to test)</label>
+      <select id="resSelect">
+        <option value="">Default</option>
+        <option value="640x480">640 × 480</option>
+        <option value="1280x720">1280 × 720</option>
+        <option value="1920x1080">1920 × 1080</option>
+        <option value="3840x2160">3840 × 2160</option>
+      </select>
+
+      <label class="small">Phone tip: on mobile use the device dropdown or choose the <code>facingMode</code> button below.</label>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button id="facingEnv">Use Rear Camera</button>
+        <button id="facingUser">Use Front Camera</button>
+      </div>
+
+      <div class="stat" id="stats">Status: idle</div>
+
+      <div id="secureHint" class="hint" style="display:none"></div>
+      <div id="permissionHint" class="hint" style="display:none"></div>
+      <div id="successHint" class="ok" style="display:none">Permission granted and devices populated.</div>
+
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button id="requestPermBtn">Request Permission</button>
+        <button id="retryBtn" style="display:none">Retry Start</button>
+      </div>
+
+      <div class="sim">
+        <button id="simDeny">Simulate Permission Denied (test UI)</button>
+        <button id="simGrant">Simulate Permission Granted (test UI)</button>
+      </div>
+
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">Snapshot & Diagnostics</h3>
+      <canvas id="photo" width="640" height="480" style="display:block"></canvas>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <a id="downloadLink" download="camera-snapshot.png"><button id="downloadBtn" disabled>Download Image</button></a>
+        <button id="toggleMirror">Toggle Mirror</button>
+      </div>
+
+      <h4 style="margin-bottom:6px">Device info</h4>
+      <div class="small" id="deviceInfo">No device selected</div>
+
+      <h4 style="margin-top:12px;margin-bottom:6px">Frame / Performance</h4>
+      <div class="small" id="perfInfo">—</div>
+
+      <hr style="margin:12px 0">
+      <div class="small">Notes:</div>
+      <ul class="small">
+        <li>Modern browsers require secure origins (HTTPS) to access camera except when running from <code>localhost</code> or <code>127.0.0.1</code>.</li>
+        <li>If permission was previously denied, you must open your browser's site settings and unblock camera access for this site.</li>
+        <li>When testing in sandboxed or CI environments, camera permission is usually blocked — run locally or on an HTTPS host that you control.</li>
+      </ul>
+    </div>
+  </div>
+
+  <footer class="small card" style="margin-top:12px">
+    This page uses <code>navigator.mediaDevices</code>. Best results in Chrome/Edge/Firefox and Safari (iOS 15+). Use HTTPS or localhost.
+  </footer>
+
+<script>
+  const startBtn = document.getElementById('startBtn');
+  const stopBtn = document.getElementById('stopBtn');
+  const snapBtn = document.getElementById('snapBtn');
+  const preview = document.getElementById('preview');
+  const deviceSelect = document.getElementById('deviceSelect');
+  const resSelect = document.getElementById('resSelect');
+  const photo = document.getElementById('photo');
+  const downloadLink = document.getElementById('downloadLink');
+  const downloadBtn = document.getElementById('downloadBtn');
+  const deviceInfo = document.getElementById('deviceInfo');
+  const stats = document.getElementById('stats');
+  const perfInfo = document.getElementById('perfInfo');
+  const facingEnv = document.getElementById('facingEnv');
+  const facingUser = document.getElementById('facingUser');
+  const toggleMirror = document.getElementById('toggleMirror');
+  const requestPermBtn = document.getElementById('requestPermBtn');
+  const retryBtn = document.getElementById('retryBtn');
+  const permissionHint = document.getElementById('permissionHint');
+  const secureHint = document.getElementById('secureHint');
+  const successHint = document.getElementById('successHint');
+  const simDeny = document.getElementById('simDeny');
+  const simGrant = document.getElementById('simGrant');
+
+  let stream = null;
+  let mirror = false;
+  let rafId = null;
+
+  function isSecureContext() {
+    try {
+      return location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+    } catch (e) { return false; }
+  }
+
+  function showSecureMessageIfNeeded() {
+    if (!isSecureContext()) {
+      secureHint.style.display = 'block';
+      secureHint.textContent = 'Warning: page is not served over HTTPS. Most browsers block camera access on insecure origins. Run this page from https:// or from http://localhost.';
+      requestPermBtn.disabled = true;
+    } else {
+      secureHint.style.display = 'none';
+      requestPermBtn.disabled = false;
+    }
+  }
+
+  async function enumerateDevicesSafe(){
+    try{
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cams = devices.filter(d => d.kind === 'videoinput');
+      deviceSelect.innerHTML = '';
+      cams.forEach((d, i) => {
+        const label = d.label || `Camera ${i+1}`;
+        const opt = document.createElement('option');
+        opt.value = d.deviceId;
+        opt.textContent = label;
+        deviceSelect.appendChild(opt);
+      });
+      if (cams.length === 0) deviceSelect.innerHTML = '<option value="">(no cameras found)</option>';
+      deviceInfo.textContent = cams.map(c => `${c.label || 'Unnamed'} (${c.deviceId})`).join('\n') || 'No cameras found';
+    }catch(e){
+      console.error('enumerateDevices failed', e);
+      deviceSelect.innerHTML = '<option value="">(error enumerating devices)</option>';
+      deviceInfo.textContent = 'Error enumerating devices';
+    }
+  }
+
+  function resolutionConstraint(sel) {
+    if (!sel) return {};
+    const [w,h] = sel.split('x').map(Number);
+    if (!w || !h) return {};
+    return { width: { exact: w }, height: { exact: h } };
+  }
+
+  async function startCamera({ deviceId=null, facingMode=null, resolution=null } = {}) {
+    stopCamera();
+    let constraints = { audio: false, video: {} };
+    if (deviceId) constraints.video.deviceId = { exact: deviceId };
+    if (facingMode) constraints.video.facingMode = { ideal: facingMode };
+    if (resolution) Object.assign(constraints.video, resolutionConstraint(resolution));
+
+    try {
+      stats.textContent = 'Status: requesting camera...';
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      preview.srcObject = stream;
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      snapBtn.disabled = false;
+      downloadBtn.disabled = true;
+
+      const track = stream.getVideoTracks()[0];
+      const settings = track.getSettings ? track.getSettings() : {};
+      deviceInfo.textContent = `Active: ${settings.deviceId || 'unknown'}\nSettings: ${JSON.stringify(settings)}`;
+      stats.textContent = 'Status: streaming';
+      monitorFPS();
+
+      await enumerateDevicesSafe();
+      permissionHint.style.display = 'none';
+      retryBtn.style.display = 'none';
+      successHint.style.display = 'block';
+    } catch (err) {
+      console.error('getUserMedia error', err);
+      handleGetUserMediaError(err);
+    }
+  }
+
+  function stopCamera() {
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+      preview.srcObject = null;
+    }
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    snapBtn.disabled = true;
+    stats.textContent = 'Status: stopped';
+    perfInfo.textContent = '—';
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = null;
+    successHint.style.display = 'none';
+  }
+
+  snapBtn.addEventListener('click', () => {
+    if (!stream) return;
+    const w = preview.videoWidth || 640;
+    const h = preview.videoHeight || 480;
+    photo.width = w; photo.height = h;
+    const ctx = photo.getContext('2d');
+    if (mirror) { ctx.translate(w,0); ctx.scale(-1,1); }
+    ctx.drawImage(preview,0,0,w,h);
+    if (mirror) ctx.setTransform(1,0,0,1,0,0);
+    downloadLink.href = photo.toDataURL('image/png');
+    downloadBtn.disabled = false;
+  });
+
+  startBtn.addEventListener('click', async () => {
+    const hasDeviceOptions = deviceSelect.options.length > 0 && !deviceSelect.options[0].textContent.includes('(no cameras');
+    const deviceId = deviceSelect.value || null;
+    const resolution = resSelect.value || null;
+    if (!hasDeviceOptions && !deviceId) {
+      stats.textContent = 'Status: requesting permission to list devices...';
+      try {
+        await requestPermissionOnce();
+        await startCamera({ deviceId: deviceSelect.value || null, resolution });
+      } catch (e) {
+        // handled by requestPermissionOnce
+      }
+    } else {
+      await startCamera({ deviceId, resolution });
+    }
+  });
+
+  stopBtn.addEventListener('click', stopCamera);
+
+  deviceSelect.addEventListener('change', async () => {
+    if (deviceSelect.value) await startCamera({ deviceId: deviceSelect.value, resolution: resSelect.value || null });
+  });
+  resSelect.addEventListener('change', async () => {
+    if (stream) await startCamera({ deviceId: deviceSelect.value || null, resolution: resSelect.value || null });
+  });
+
+  facingEnv.addEventListener('click', async () => { await startCamera({ facingMode: 'environment', resolution: resSelect.value || null }); });
+  facingUser.addEventListener('click', async () => { await startCamera({ facingMode: 'user', resolution: resSelect.value || null }); });
+
+  toggleMirror.addEventListener('click', () => { mirror = !mirror; preview.style.transform = mirror ? 'scaleX(-1)' : 'none'; });
+
+  let lastTime = performance.now(); let frames = 0;
+  function monitorFPS() {
+    frames = 0; lastTime = performance.now();
+    function loop(now){
+      frames++;
+      if (now - lastTime >= 1000) { perfInfo.textContent = `FPS: ${frames}`; lastTime = now; frames = 0; }
+      rafId = requestAnimationFrame(loop);
+    }
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = requestAnimationFrame(loop);
+  }
+
+  async function requestPermissionOnce(){
+    if (!isSecureContext()) {
+      permissionHint.style.display = 'block';
+      permissionHint.textContent = 'Cannot request permission: page is not secure. Serve over HTTPS or use localhost.';
+      throw new Error('Insecure origin');
+    }
+    try{
+      stats.textContent = 'Status: prompting for camera permission...';
+      const pStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      pStream.getTracks().forEach(t => t.stop());
+      stats.textContent = 'Status: permission granted';
+      await enumerateDevicesSafe();
+      permissionHint.style.display = 'none';
+      retryBtn.style.display = 'none';
+      successHint.style.display = 'block';
+    }catch(err){
+      console.error('Permission request failed', err);
+      handleGetUserMediaError(err);
+      throw err;
+    }
+  }
+
+  function handleGetUserMediaError(err) {
+    const name = (err && err.name) ? err.name : 'UnknownError';
+    const msg = (err && err.message) ? err.message : '';
+    if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') {
+      stats.textContent = `Status: permission denied (${name})`;
+      permissionHint.style.display = 'block';
+      permissionHint.innerHTML = `Permission was denied by the browser.\nError: ${name} - ${msg}\n\nNext steps:\n1) Reload the page and click \"Request Permission\".\n2) If you previously denied, open your browser's site settings and allow camera access for this site.\n3) Ensure the page is served over HTTPS or localhost.`;
+      retryBtn.style.display = 'inline-block';
+    } else if (name === 'NotFoundError' || name === 'OverconstrainedError' || name === 'ConstraintNotSatisfiedError') {
+      stats.textContent = `Status: no camera found or constraints unsatisfiable (${name})`;
+      permissionHint.style.display = 'block';
+      permissionHint.textContent = `No camera found or requested resolution not supported. Error: ${name}`;
+    } else if (name === 'NotReadableError' || name === 'TrackStartError') {
+      stats.textContent = 'Status: camera already in use (NotReadableError)';
+      permissionHint.style.display = 'block';
+      permissionHint.textContent = 'Camera appears to be in use by another application. Close other apps and retry.';
+    } else {
+      stats.textContent = 'Status: error - ' + (msg || name || 'Unknown error');
+      permissionHint.style.display = 'block';
+      permissionHint.textContent = `Error: ${name} - ${msg}`;
+    }
+  }
+
+  // Simulation test cases (UI-only) to help debug permission flows without a camera
+  simDeny.addEventListener('click', () => {
+    handleGetUserMediaError({ name: 'NotAllowedError', message: 'Simulated denial for testing' });
+  });
+  simGrant.addEventListener('click', async () => {
+    // Simulate success: show success hint and populate a fake device (UI test only)
+    successHint.style.display = 'block';
+    permissionHint.style.display = 'none';
+    deviceSelect.innerHTML = '';
+    const opt = document.createElement('option'); opt.value = 'sim-1'; opt.textContent = 'Simulated Camera 1'; deviceSelect.appendChild(opt);
+    deviceInfo.textContent = 'Simulated Camera 1 (sim-1)';
+    stats.textContent = 'Status: permission granted (simulated)';
+  });
+
+  retryBtn.addEventListener('click', async () => {
+    try{ await startCamera({ deviceId: deviceSelect.value || null, resolution: resSelect.value || null }); }catch(e){/* handled */}
+  });
+  requestPermBtn.addEventListener('click', async () => { try{ await requestPermissionOnce(); }catch(e){/* handled */} });
+
+  async function init() {
+    showSecureMessageIfNeeded();
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+      stats.textContent = 'Status: navigator.mediaDevices not supported in this browser';
+      return;
+    }
+    await enumerateDevicesSafe();
+    const cams = Array.from(deviceSelect.options);
+    if (cams.length === 0 || cams[0].textContent.includes('no cameras')) {
+      stats.textContent = 'Status: no cameras found — click "Request Permission" and allow camera to populate device list';
+      permissionHint.style.display = 'block';
+      permissionHint.textContent = 'Device list empty. Click Request Permission to show devices (permissions must be allowed).';
+    }
+
+    try{
+      if (navigator.permissions && navigator.permissions.query) {
+        // Some browsers don't support 'camera'; we attempt to observe related permissions where possible
+        const q = await navigator.permissions.query({ name: 'camera' }).catch(()=>null);
+        if (q && q.onchange) q.onchange = () => enumerateDevicesSafe();
+      }
+    }catch(e){/* ignore */}
+
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+      navigator.mediaDevices.addEventListener('devicechange', enumerateDevicesSafe);
+    }
+  }
+
+  init();
+</script>
+</body>
+</html>
